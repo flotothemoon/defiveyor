@@ -5,6 +5,7 @@ import random
 import sys
 import time
 from typing import Optional
+from dateutil import tz
 
 
 # round datetime to milliseconds for consistency across languages
@@ -107,3 +108,32 @@ class ContinuousRateLimiter:
             jitter_seconds=jitter_seconds,
             logger=logger,
         )
+
+
+def rate_limited(
+    name: Optional[str] = None,
+    *,
+    operations_per_hour: Optional[float] = None,
+    operations_per_minute: Optional[float] = None,
+    operations_per_second: Optional[float] = None,
+    jitter: Optional[float] = None,
+    logger: Optional[logging.Logger] = None,
+):
+    def _wrap_rate_limited(func):
+        rl_name = name or func.__name__
+        rate_limiter = ContinuousRateLimiter.make(
+            name=rl_name,
+            operations_per_hour=operations_per_hour,
+            operations_per_minute=operations_per_minute,
+            operations_per_second=operations_per_second,
+            jitter_percentage=jitter,
+            logger=logger,
+        )
+
+        async def _rate_limited(*args, **kwargs):
+            await rate_limiter.next()
+            return await func(*args, **kwargs)
+
+        return _rate_limited
+
+    return _wrap_rate_limited

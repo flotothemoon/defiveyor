@@ -1,37 +1,21 @@
+import logging
+
 from sqlalchemy import Column, Integer, DateTime, String, Float
-from sqlalchemy.orm import declarative_base, relationship
+import sqlalchemy.engine
+from sqlalchemy.orm import declarative_base
 
 from defiveyor.utils import utcnow_rounded
 
 Base = declarative_base()
 
 
-class Asset(Base):
-    __tablename__ = "assets"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, nullable=False, unique=True)
-    symbol = Column(String, nullable=False, unique=True)
-
-
-class Network(Base):
-    __tablename__ = "networks"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, nullable=False, unique=True)
-
-
-class Protocol(Base):
-    __tablename__ = "protocols"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, nullable=False, unique=True)
-
-
 # TODO @Cleanup: normalise Records with references to Asset, Network, Protocol.. tables
 class AssetReturnRecord(Base):
     __tablename__ = "asset_records"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    network = relationship("Network")
-    protocol = relationship("Protocol")
-    asset = relationship("Asset")
+    network = Column(String, nullable=False)
+    protocol = Column(String, nullable=False)
+    asset = Column(String, nullable=False)
     date_recorded = Column(DateTime, default=utcnow_rounded, nullable=False)
     apy = Column(Float, nullable=False)
 
@@ -39,9 +23,18 @@ class AssetReturnRecord(Base):
 class AssetPairReturnRecord(Base):
     __tablename__ = "asset_pair_records"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    network = relationship("Network")
-    protocol = relationship("Protocol")
-    asset_0 = relationship("Asset")
-    asset_1 = relationship("Asset")
+    network = Column(String, nullable=False)
+    protocol = Column(String, nullable=False)
+    asset_0 = Column(String, nullable=False)
+    asset_1 = Column(String, nullable=False)
     date_recorded = Column(DateTime, default=utcnow_rounded, nullable=False)
     apy = Column(Float, nullable=False)
+
+
+logger = logging.getLogger("models")
+
+
+def create_all(engine: sqlalchemy.engine.Engine):
+    logger.info("creating all models")
+    Base.metadata.create_all(engine)
+    logger.info("created all models")

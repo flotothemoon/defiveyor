@@ -1,12 +1,21 @@
 import enum
+from typing import Optional
 
 
 class Asset(enum.Enum):
-    Bitcoin = "BTC",
-    Ethereum = "ETH",
-    DAI = "DAI",
-    USD_Coin = "USDC",
+    Bitcoin = "BTC"
+    Ethereum = "ETH"
+    DAI = "DAI"
+    USD_Coin = "USDC"
     USD_Token = "USDT"
+
+    @staticmethod
+    def map(asset_symbol: str) -> Optional["Asset"]:
+        for asset in Asset:
+            if asset.value in asset_symbol:
+                return asset
+
+        return None
 
 
 class Protocol(enum.Enum):
