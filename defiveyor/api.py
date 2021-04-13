@@ -1,19 +1,38 @@
 import asyncio
-from typing import List
+from typing import List, Optional
 
 import fastapi
+from pydantic import BaseModel
 import uvicorn
 
-from defiveyor import models
 from defiveyor.utils import configure_logging
+
+
+class Asset(BaseModel):
+    network: str
+    protocol: str
+    symbol: str
+    symbol_wrapped: Optional[str]
+    apy_average_30days: float
+
+
+class AssetPair(BaseModel):
+    network: str
+    protocol: str
+    symbol_0: str
+    symbol_0_wrapped: Optional[str]
+    symbol_1: str
+    symbol_1_wrapped: Optional[str]
+    apy_average_30days: float
+
 
 asgi_app = fastapi.FastAPI(title="Defiveyor API", version="2021.4")
 
 
-@asgi_app.get("/assets", response_model=List[models.Asset])
+@asgi_app.get("/assets", response_model=List[Asset])
 async def get_assets():
     return [
-        models.Asset(
+        Asset(
             network="ethereum",
             protocol="curve",
             symbol="ETH",
@@ -23,10 +42,10 @@ async def get_assets():
     ]
 
 
-@asgi_app.get("/pairs", response_model=List[models.AssetPair])
+@asgi_app.get("/pairs", response_model=List[AssetPair])
 async def get_asset_pairs():
     return [
-        models.AssetPair(
+        AssetPair(
             network="ethereum",
             protocol="uniswap-v2",
             symbol_0="ETH",
@@ -46,7 +65,7 @@ if __name__ == "__main__":
         port=7777,
         log_config=None,
         log_level=None,
-        access_log=True,
+        access_log=False,
     )
     uvicorn_server = uvicorn.Server(config=uvicorn_config)
     uvicorn_server.install_signal_handlers = lambda *args: None

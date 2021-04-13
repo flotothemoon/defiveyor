@@ -3,7 +3,14 @@ import datetime
 import logging
 import random
 import sys
+import time
 from typing import Optional
+
+
+# round datetime to milliseconds for consistency across languages
+def utcnow_rounded() -> datetime.datetime:
+    t = int(time.time() * 1000) / 1000
+    return datetime.datetime.utcfromtimestamp(t).replace(tzinfo=tz.UTC)
 
 
 def configure_logging():
