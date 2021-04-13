@@ -1,9 +1,11 @@
 import asyncio
+from itertools import chain
 import logging
 import os
 from typing import List, Union, Any, Mapping
 
 import aiohttp
+from attr import dataclass
 import orjson
 
 from defiveyor import utils, models
@@ -16,8 +18,16 @@ logger = logging.getLogger("ingest")
 
 ZAPPER_API_KEY = os.environ["ZAPPER_API_KEY"]
 
-Record = Union[models.AssetReturnRecord, models.AssetPairReturnRecord]
-RecordList = List[Record]
+
+@dataclass(frozen=True, slots=True)
+class BasicRecord:
+    network: Network
+    protocol: Protocol
+    assets: List[Asset]
+    apy: float
+
+
+RecordList = List[BasicRecord]
 
 
 async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
@@ -43,9 +53,6 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
     async def _get_supported_vault_stats():
         return await _get("vault-stats/supported")
 
-    async def _get_supported_lending_stats():
-        return await _get("lending-stats/supported")
-
     async def _get_pool_stats(pool_type: str):
         return await _get(f"pool-stats/{pool_type}")
 
@@ -63,6 +70,8 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
         Protocol.SushiSwap: "sushiswap",
         Protocol.UniSwap: "uniswap-v2",
         Protocol.Yearn: "yearn",
+        Protocol.Aave: "aave",
+        Protocol.Compound: "compound",
     }
 
     supported_pool_stats_by_network = await _get_supported_pool_stats()
@@ -75,11 +84,8 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
         stats["network"]: stats["protocols"]
         for stats in supported_vault_stats_by_network
     }
-    supported_lending_stats_by_network = await _get_supported_lending_stats()
-    supported_lending_stats_by_network = {
-        stats["network"]: stats["protocols"]
-        for stats in supported_lending_stats_by_network
-    }
+    # there is no API endpoint for getting supported lending stats for some reason
+    supported_lending_stats_by_network = {"ethereum": {"aave", "compound"}}
 
     for network in (Network.Ethereum,):
         network_key = network.value
@@ -98,17 +104,29 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
                     any_unknown = any([asset is None for asset in assets])
                     # TODO @Robustness: do something if any unknown?
                     assets = [asset for asset in assets if asset is not None]
-                    if len(assets) > 2:
-                        logger.warning(f"ignoring pool with >2 assets: {assets}")
+                    if len(assets) != 2 or any_unknown:
                         continue
-                    apy = pool_stat['yearlyROI']
-
-                    records.append(models.AssetPairReturnRecord(
-
-                    ))
+                    apy = pool_stat["yearlyROI"] or 0
+                    record = BasicRecord(
+                        protocol=protocol,
+                        network=network,
+                        assets=assets,
+                        apy=apy,
+                    )
+                    logger.info(f"got record: {record}")
+                    records.append(record)
 
             if protocol_key in supported_vault_stats:
                 vault_stats = await _get_vault_stats(protocol_key)
+                for vault_stat in vault_stats:
+                    # TODO @Feature: record vault stats
+                    pass
+
+            if protocol_key in supported_lending_stats:
+                lending_stats = await _get_lending_stats(protocol_key)
+                for lending_stat in lending_stats:
+                    # TODO @Feature: record lending stats
+                    pass
 
     return records
 
@@ -118,16 +136,23 @@ async def _ingest_compound(session: aiohttp.ClientSession) -> RecordList:
     return records
 
 
+async def _ingest_bancor(session: aiohttp.ClientSession) -> RecordList:
+    records: RecordList = []
+    return records
+
+
 async def _ingest() -> RecordList:
     logger.info("starting")
 
-    records = []
     async with aiohttp.ClientSession() as session:
-        records.extend(await _ingest_zapper(session))
-
-    logger.info("completed")
-
-    return records
+        ingests_tasks = [
+            _ingest_zapper(session),
+            _ingest_bancor(session),
+            _ingest_compound(session),
+        ]
+        ingest_results = await asyncio.gather(*ingests_tasks)
+        logger.info("completed")
+        return list(chain(ingest_results))
 
 
 if __name__ == "__main__":

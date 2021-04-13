@@ -1,10 +1,12 @@
 import asyncio
+from asyncio import CancelledError
 import datetime
 import logging
 import random
 import sys
 import time
-from typing import Optional
+import traceback
+from typing import Optional, Coroutine
 from dateutil import tz
 
 
@@ -25,6 +27,26 @@ def configure_logging():
     console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(fmt=message_format)
     logging.root.addHandler(console_handler)
+
+
+async def start_task_wrapped(coro: Coroutine, logger: logging.Logger):
+    logger.debug(f"starting task {coro.__name__}")
+    try:
+        await coro
+    except CancelledError as e:
+        logger.debug(f"task {coro.__name__} has been canceled")
+        raise e
+    except Exception as e:
+        logger.error(f"task {coro.__name__} failed: {e}")
+        traceback.print_exception(type(e), e, e.__traceback__)
+        raise e
+
+
+def start_task(coro: Coroutine, logger: logging.Logger):
+    wrapped = start_task_wrapped(coro, logger)
+    wrapped.__name__ = coro.__name__
+    task = asyncio.create_task(wrapped, name=wrapped.__name__)
+    return task
 
 
 class ContinuousRateLimiter:
