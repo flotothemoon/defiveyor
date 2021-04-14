@@ -89,6 +89,7 @@ async def _do_get(
 
 
 async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
+    # see https://docs.zapper.fi/zapper-api/api-guides
     base_url = "https://api.zapper.fi/v1/"
 
     @rate_limited(name="zapper", logger=logger, operations_per_second=1)
@@ -195,15 +196,11 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
     return records
 
 
-async def _ingest_bancor(session: aiohttp.ClientSession) -> RecordList:
-    records: RecordList = []
-    return records
-
-
 async def _ingest_dydx(session: aiohttp.ClientSession) -> RecordList:
+    # see https://docs.dydx.exchange/#get-markets
     base_url = "https://api.dydx.exchange/v1/"
 
-    @rate_limited(name="zapper", logger=logger, operations_per_second=1)
+    @rate_limited(name="dydx", logger=logger, operations_per_second=1)
     async def _get(path: str, params: Mapping[str, Any] = None):
         params = params or {}
         final_path = base_url + path
@@ -232,11 +229,56 @@ async def _ingest_dydx(session: aiohttp.ClientSession) -> RecordList:
     return records
 
 
+async def _ingest_bancor(session: aiohttp.ClientSession) -> RecordList:
+    # see https://docs.bancor.network/rest-api/api-reference
+    base_url = "https://api-v2.bancor.network/"
+
+    @rate_limited(name="bancor", logger=logger, operations_per_second=1)
+    async def _get(path: str, params: Mapping[str, Any] = None):
+        params = params or {}
+        final_path = base_url + path
+        return await _do_get(final_path, params, session)
+
+    async def _get_pools():
+        response = await _get("pools")
+        return response['data']
+
+    records: RecordList = []
+    pools = await _get_pools()
+    for pool in pools:
+        if pool['dlt_type'] != Network.Ethereum.value:
+            continue
+        assets = [
+            WrappedAsset.wrap(reserve['symbol'])
+            for reserve in pool['reserves']
+        ]
+        assets = [asset for asset in assets if asset is not None]
+        if len(assets) < 1:
+            continue
+
+        # apy is fees_24h annualised divided by liquidity
+        fees_24h = float(pool['fees_24h']['usd'])
+        liquidity = float(pool['liquidity']['usd'])
+        if liquidity <= 0:
+            continue
+        fees_annualised = 365.2425 * fees_24h
+        apy = fees_annualised / liquidity
+        records.append(BasicRecord(
+            protocol=Protocol.Bancor,
+            network=Network.Ethereum,
+            assets=assets,
+            apy=apy
+        ))
+
+    return records
+
+
 async def ingest() -> RecordList:
     logger.info("starting")
 
     async with aiohttp.ClientSession() as session:
         ingests_tasks = [
+            _ingest_bancor(session),
             _ingest_dydx(session),
             _ingest_zapper(session),
         ]
