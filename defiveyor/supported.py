@@ -22,7 +22,6 @@ class Asset(enum.Enum):
 class Protocol(enum.Enum):
     UniSwap = "uniswap-v2"
     SushiSwap = "sushiswap"
-    Curve = "curve"
     Bancor = "bancor"
     OneInch = "1inch"
     Yearn = "yearn"
