@@ -2,15 +2,13 @@ import asyncio
 from itertools import chain
 import logging
 import os
-from typing import List, Union, Any, Mapping
+from typing import List, Any, Mapping, Optional
 
 import aiohttp
 from attr import dataclass
 import orjson
 
-from defiveyor import utils, models
-from defiveyor.crud import engine
-from defiveyor.models import create_all
+from defiveyor import utils
 from defiveyor.supported import Protocol, Network, Asset
 from defiveyor.utils import rate_limited
 
@@ -19,15 +17,73 @@ logger = logging.getLogger("ingest")
 ZAPPER_API_KEY = os.environ["ZAPPER_API_KEY"]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
+class WrappedAsset:
+    asset: Asset
+    wrapped_symbol: str
+
+    def __str__(self):
+        return repr(self)
+
+    def __repr__(self) -> str:
+        return f"WrappedAsset({self.asset.name},wrapped={self.wrapped_symbol})"
+
+    @staticmethod
+    def wrap(symbol: str) -> Optional["WrappedAsset"]:
+        asset = Asset.map(symbol)
+        if asset is None:
+            return None
+        else:
+            return WrappedAsset(asset=asset, wrapped_symbol=symbol)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class BasicRecord:
     network: Network
     protocol: Protocol
-    assets: List[Asset]
+    assets: List[WrappedAsset]
     apy: float
+
+    def __str__(self):
+        return repr(self)
+
+    def __repr__(self) -> str:
+        assets_repr = [repr(asset) for asset in self.assets]
+        return f"BasicRecord(" \
+               f"network={self.network.name}," \
+               f"protocol={self.protocol.name}," \
+               f"assets={assets_repr}," \
+               f"apy={self.apy}" \
+               f")"
 
 
 RecordList = List[BasicRecord]
+
+
+async def _do_get(
+    path: str,
+    params: Mapping[str, Any],
+    session: aiohttp.ClientSession,
+    timeout_seconds=10,
+):
+    logger.debug(f"GET {path}")
+    attempts = 0
+    while True:
+        try:
+            async with session.get(
+                path, params=params, timeout=timeout_seconds
+            ) as response:
+                response_text = await response.text()
+                response_json = orjson.loads(response_text)
+                return response_json
+        except TimeoutError:
+            attempts += 1
+            retry_timeout_seconds = 2 ** (min(attempts, 5))
+            logger.warning(
+                f"request to {path} timed out,"
+                f" retrying in {retry_timeout_seconds}s (attempt={attempts})"
+            )
+            await asyncio.sleep(retry_timeout_seconds)
 
 
 async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
@@ -38,14 +94,9 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
     @rate_limited(name="zapper", logger=logger, operations_per_second=1)
     async def _get(path: str, params: Mapping[str, Any] = None):
         params = params or {}
+        params = {**params, "api_key": ZAPPER_API_KEY}
         final_path = base_url + path
-        logger.debug(f"getting {final_path}")
-        async with session.get(
-            final_path, params={"api_key": ZAPPER_API_KEY, **params}
-        ) as response:
-            response_text = await response.text()
-            response_json = orjson.loads(response_text)
-            return response_json
+        return await _do_get(final_path, params, session)
 
     async def _get_supported_pool_stats():
         return await _get("pool-stats/supported")
@@ -65,7 +116,8 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
     protocols_mapping: Mapping[Protocol, str] = {
         # TODO @Feature @Data: bancor pool stats all have '0' as yearlyROI
         # Protocol.Bancor: 'bancor',
-        Protocol.Curve: "curve",
+        # TODO @Feature @Data: Curve pools can have >2 tokens
+        # Protocol.Curve: "curve",
         Protocol.OneInch: "1inch",
         Protocol.SushiSwap: "sushiswap",
         Protocol.UniSwap: "uniswap-v2",
@@ -96,37 +148,48 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
             if protocol_key in supported_pool_stats:
                 pool_stats = await _get_pool_stats(protocol_key)
                 for pool_stat in pool_stats:
-                    assets = {
-                        Asset.map(token["symbol"])
+                    assets = [
+                        WrappedAsset.wrap(token["symbol"])
                         for token in pool_stat["tokens"]
                         if token["reserve"] > 0
-                    }
+                    ]
                     any_unknown = any([asset is None for asset in assets])
-                    # TODO @Robustness: do something if any unknown?
                     assets = [asset for asset in assets if asset is not None]
+                    # TODO @Robustness: do something if any unknown?
                     if len(assets) != 2 or any_unknown:
                         continue
+
                     apy = pool_stat["yearlyROI"] or 0
-                    record = BasicRecord(
-                        protocol=protocol,
-                        network=network,
-                        assets=assets,
-                        apy=apy,
+                    if apy <= 0:
+                        continue
+                    records.append(
+                        BasicRecord(
+                            protocol=protocol,
+                            network=network,
+                            assets=assets,
+                            apy=apy,
+                        )
                     )
-                    logger.info(f"got record: {record}")
-                    records.append(record)
 
             if protocol_key in supported_vault_stats:
-                vault_stats = await _get_vault_stats(protocol_key)
-                for vault_stat in vault_stats:
-                    # TODO @Feature: record vault stats
-                    pass
+                # TODO @Feature: record vault stats
+                pass
 
             if protocol_key in supported_lending_stats:
                 lending_stats = await _get_lending_stats(protocol_key)
                 for lending_stat in lending_stats:
-                    # TODO @Feature: record lending stats
-                    pass
+                    asset = WrappedAsset.wrap(lending_stat["symbol"])
+                    if asset is None:
+                        continue
+                    apy = lending_stat["supplyApy"]
+                    if apy <= 0:
+                        continue
+
+                    records.append(
+                        BasicRecord(
+                            protocol=protocol, network=network, assets=[asset], apy=apy
+                        )
+                    )
 
     return records
 
@@ -141,7 +204,7 @@ async def _ingest_bancor(session: aiohttp.ClientSession) -> RecordList:
     return records
 
 
-async def _ingest() -> RecordList:
+async def ingest() -> RecordList:
     logger.info("starting")
 
     async with aiohttp.ClientSession() as session:
@@ -152,10 +215,12 @@ async def _ingest() -> RecordList:
         ]
         ingest_results = await asyncio.gather(*ingests_tasks)
         logger.info("completed")
-        return list(chain(ingest_results))
+        return list(chain(*ingest_results))
 
 
 if __name__ == "__main__":
     utils.configure_logging()
-    create_all(engine)
-    asyncio.get_event_loop().run_until_complete(_ingest())
+    records: RecordList = asyncio.get_event_loop().run_until_complete(ingest())
+    logger.info(f"got {len(records)} records")
+    for record in records:
+        logger.info(f"got record: {record}")

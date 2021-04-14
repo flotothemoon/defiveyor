@@ -12,6 +12,7 @@ class Asset(enum.Enum):
     @staticmethod
     def map(asset_symbol: str) -> Optional["Asset"]:
         for asset in Asset:
+            # TODO @Robustness: use stricter mechanism for mapping (wrapped) symbols to assets
             if asset.value in asset_symbol:
                 return asset
 
