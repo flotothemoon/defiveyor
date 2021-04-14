@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import List, Optional, Tuple
 
 import fastapi
@@ -7,6 +8,10 @@ import uvicorn
 
 from defiveyor.ingest import ingest, RecordList
 from defiveyor.utils import configure_logging
+
+UPDATE_STATE_INTERVAL_SECONDS = 60 * 60  # once per hour
+
+logger = logging.getLogger("api")
 
 
 class Asset(BaseModel):
@@ -28,6 +33,16 @@ class AssetPair(BaseModel):
 
 
 asgi_app = fastapi.FastAPI(title="Defiveyor API", version="2021.4")
+
+
+@asgi_app.get("/v1/assets", response_model=List[Asset])
+async def get_assets():
+    return asgi_app.state.assets
+
+
+@asgi_app.get("/v1/pairs", response_model=List[AssetPair])
+async def get_asset_pairs():
+    return asgi_app.state.asset_pairs
 
 
 async def _update_ingest() -> Tuple[List[Asset], List[AssetPair]]:
@@ -58,19 +73,23 @@ async def _update_ingest() -> Tuple[List[Asset], List[AssetPair]]:
 
 @asgi_app.on_event('startup')
 async def _init():
+    await _update_state()
+    asyncio.create_task(_update_state_loop())
+
+
+async def _update_state():
+    logger.info("updating state from ingest")
     assets, asset_pairs = await _update_ingest()
     asgi_app.state.assets = assets
     asgi_app.state.asset_pairs = asset_pairs
+    logger.info("update done")
 
 
-@asgi_app.get("/v1/assets", response_model=List[Asset])
-async def get_assets():
-    return asgi_app.state.assets
-
-
-@asgi_app.get("/v1/pairs", response_model=List[AssetPair])
-async def get_asset_pairs():
-    return asgi_app.state.asset_pairs
+async def _update_state_loop():
+    while True:
+        logger.info(f"waiting {UPDATE_STATE_INTERVAL_SECONDS}s for next update")
+        await asyncio.sleep(UPDATE_STATE_INTERVAL_SECONDS)
+        await _update_state()
 
 
 if __name__ == "__main__":
