@@ -63,12 +63,12 @@ async def _init():
     asgi_app.state.asset_pairs = asset_pairs
 
 
-@asgi_app.get("/assets", response_model=List[Asset])
+@asgi_app.get("/v1/assets", response_model=List[Asset])
 async def get_assets():
     return asgi_app.state.assets
 
 
-@asgi_app.get("/pairs", response_model=List[AssetPair])
+@asgi_app.get("/v1/pairs", response_model=List[AssetPair])
 async def get_asset_pairs():
     return asgi_app.state.asset_pairs
 

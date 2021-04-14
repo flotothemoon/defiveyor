@@ -49,12 +49,14 @@ class BasicRecord:
 
     def __repr__(self) -> str:
         assets_repr = [repr(asset) for asset in self.assets]
-        return f"BasicRecord(" \
-               f"network={self.network.name}," \
-               f"protocol={self.protocol.name}," \
-               f"assets={assets_repr}," \
-               f"apy={self.apy}" \
-               f")"
+        return (
+            f"BasicRecord("
+            f"network={self.network.name},"
+            f"protocol={self.protocol.name},"
+            f"assets={assets_repr},"
+            f"apy={self.apy}"
+            f")"
+        )
 
 
 RecordList = List[BasicRecord]
@@ -66,9 +68,9 @@ async def _do_get(
     session: aiohttp.ClientSession,
     timeout_seconds=10,
 ):
-    logger.debug(f"GET {path}")
     attempts = 0
     while True:
+        logger.debug(f"GET {path}")
         try:
             async with session.get(
                 path, params=params, timeout=timeout_seconds
@@ -87,8 +89,6 @@ async def _do_get(
 
 
 async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
-    records: RecordList = []
-
     base_url = "https://api.zapper.fi/v1/"
 
     @rate_limited(name="zapper", logger=logger, operations_per_second=1)
@@ -139,6 +139,7 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
     # there is no API endpoint for getting supported lending stats for some reason
     supported_lending_stats_by_network = {"ethereum": {"aave", "compound"}}
 
+    records: RecordList = []
     for network in (Network.Ethereum,):
         network_key = network.value
         supported_pool_stats = supported_pool_stats_by_network.get(network_key)
@@ -194,13 +195,40 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
     return records
 
 
-async def _ingest_compound(session: aiohttp.ClientSession) -> RecordList:
+async def _ingest_bancor(session: aiohttp.ClientSession) -> RecordList:
     records: RecordList = []
     return records
 
 
-async def _ingest_bancor(session: aiohttp.ClientSession) -> RecordList:
+async def _ingest_dydx(session: aiohttp.ClientSession) -> RecordList:
+    base_url = "https://api.dydx.exchange/v1/"
+
+    @rate_limited(name="zapper", logger=logger, operations_per_second=1)
+    async def _get(path: str, params: Mapping[str, Any] = None):
+        params = params or {}
+        final_path = base_url + path
+        return await _do_get(final_path, params, session)
+
+    async def _get_markets():
+        response = await _get("markets")
+        return response['markets']
+
     records: RecordList = []
+    markets = await _get_markets()
+    for market in markets:
+        asset = WrappedAsset.wrap(market['symbol'])
+        if asset is None:
+            continue
+        apy = float(market.get('totalSupplyAPY', 0.0))
+        if apy <= 0:
+            continue
+        records.append(BasicRecord(
+            protocol=Protocol.dYdX,
+            network=Network.Ethereum,
+            assets=[asset],
+            apy=apy
+        ))
+
     return records
 
 
@@ -209,9 +237,8 @@ async def ingest() -> RecordList:
 
     async with aiohttp.ClientSession() as session:
         ingests_tasks = [
+            _ingest_dydx(session),
             _ingest_zapper(session),
-            _ingest_bancor(session),
-            _ingest_compound(session),
         ]
         ingest_results = await asyncio.gather(*ingests_tasks)
         logger.info("completed")
