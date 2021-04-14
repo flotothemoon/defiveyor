@@ -102,27 +102,20 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
     async def _get_supported_pool_stats():
         return await _get("pool-stats/supported")
 
-    async def _get_supported_vault_stats():
-        return await _get("vault-stats/supported")
-
     async def _get_pool_stats(pool_type: str):
         return await _get(f"pool-stats/{pool_type}")
-
-    async def _get_vault_stats(vault_type: str):
-        return await _get(f"vault-stats/{vault_type}")
 
     async def _get_lending_stats(vault_type: str):
         return await _get(f"lending-stats/{vault_type}")
 
+    # Note: Zapper supports Yearn and Bancor but they don't have APY information,
+    #  so they are ingested separately.
     protocols_mapping: Mapping[Protocol, str] = {
-        # TODO @Feature @Data: bancor pool stats all have '0' as yearlyROI
-        # Protocol.Bancor: 'bancor',
         # TODO @Feature @Data: Curve pools can have >2 tokens
         # Protocol.Curve: "curve",
         Protocol.OneInch: "1inch",
         Protocol.SushiSwap: "sushiswap",
         Protocol.UniSwap: "uniswap-v2",
-        Protocol.Yearn: "yearn",
         Protocol.Aave: "aave",
         Protocol.Compound: "compound",
     }
@@ -132,11 +125,6 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
         stats["network"]: stats["protocols"]
         for stats in supported_pool_stats_by_network
     }
-    supported_vault_stats_by_network = await _get_supported_vault_stats()
-    supported_vault_stats_by_network = {
-        stats["network"]: stats["protocols"]
-        for stats in supported_vault_stats_by_network
-    }
     # there is no API endpoint for getting supported lending stats for some reason
     supported_lending_stats_by_network = {"ethereum": {"aave", "compound"}}
 
@@ -144,7 +132,6 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
     for network in (Network.Ethereum,):
         network_key = network.value
         supported_pool_stats = supported_pool_stats_by_network.get(network_key)
-        supported_vault_stats = supported_vault_stats_by_network.get(network_key)
         supported_lending_stats = supported_lending_stats_by_network.get(network_key)
         for protocol, protocol_key in protocols_mapping.items():
             if protocol_key in supported_pool_stats:
@@ -172,10 +159,6 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
                             apy=apy,
                         )
                     )
-
-            if protocol_key in supported_vault_stats:
-                # TODO @Feature: record vault stats
-                pass
 
             if protocol_key in supported_lending_stats:
                 lending_stats = await _get_lending_stats(protocol_key)
@@ -273,11 +256,54 @@ async def _ingest_bancor(session: aiohttp.ClientSession) -> RecordList:
     return records
 
 
+async def _ingest_yearn(session: aiohttp.ClientSession) -> RecordList:
+    # see https://yearn.tools/#/
+    base_url = "https://dev-api.yearn.tools/"
+
+    @rate_limited(name="yearn", logger=logger, operations_per_second=1)
+    async def _get(path: str, params: Mapping[str, Any] = None):
+        params = params or {}
+        final_path = base_url + path
+        return await _do_get(final_path, params, session)
+
+    async def _get_vaults_apy():
+        return await _get("vaults/apy")
+
+    records: RecordList = []
+    vaults = await _get_vaults_apy()
+    for vault in vaults:
+        if "/" in vault['description']:
+            token_symbols = vault['description'].split("/")
+        else:
+            token_symbols = [vault['vaultSymbol']]
+        assets = [
+            WrappedAsset.wrap(symbol) for symbol in token_symbols
+        ]
+        any_unknown = any([asset is None for asset in assets])
+        assets = [asset for asset in assets if asset is not None]
+        if any_unknown is None:
+            continue
+        if len(assets) != 1:
+            continue
+        apy = float(vault.get('apyOneMonthSample', 0.0)) / 100.0
+        if apy <= 0:
+            continue
+        records.append(BasicRecord(
+            protocol=Protocol.Yearn,
+            network=Network.Ethereum,
+            assets=assets,
+            apy=apy
+        ))
+
+    return records
+
+
 async def ingest() -> RecordList:
     logger.info("starting")
 
     async with aiohttp.ClientSession() as session:
         ingests_tasks = [
+            _ingest_yearn(session),
             _ingest_bancor(session),
             _ingest_dydx(session),
             _ingest_zapper(session),
