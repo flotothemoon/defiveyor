@@ -2,28 +2,6 @@
 
 [Cryptoveyor](https://www.cryptoveyor.com) but for DeFi rates.
 
-## Format
-
-```
-GET /assets
- => array of
- - protocol: string ("uniswapv2")
- - symbol: string ("BTC")
- - symbol_wrapped: string ("WBTC")
- - apy_average_30days: float (0.07)
-```
-
-```
-GET /pairs
- => array of
- - protocol: string ("uniswapv2")
- - symbol0: string ("BTC")
- - symbol0_wrapped: string ("WBTC")
- - symbol1: string ("ETH")
- - symbol1_wrapped: string ("WETH")
- - apy_average_30days: float (0.07)
-```
-
 ## Assets
 
 - BTC
