@@ -115,7 +115,7 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
         # Protocol.Curve: "curve",
         Protocol.OneInch: "1inch",
         Protocol.SushiSwap: "sushiswap",
-        Protocol.UniSwap: "uniswap-v2",
+        Protocol.UniSwapV2: "uniswap-v2",
         Protocol.Aave: "aave",
         Protocol.Compound: "compound",
     }
@@ -266,27 +266,25 @@ async def _ingest_yearn(session: aiohttp.ClientSession) -> RecordList:
         final_path = base_url + path
         return await _do_get(final_path, params, session)
 
-    async def _get_vaults_apy():
-        return await _get("vaults/apy")
+    async def _get_vaults_all():
+        return await _get("vaults/all")
 
     records: RecordList = []
-    vaults = await _get_vaults_apy()
-    for vault in vaults:
-        if "/" in vault['description']:
-            token_symbols = vault['description'].split("/")
-        else:
-            token_symbols = [vault['vaultSymbol']]
+    all_vaults = await _get_vaults_all()
+    for vault in all_vaults:
+        token_symbols = [vault['displayName']]
         assets = [
             WrappedAsset.wrap(symbol) for symbol in token_symbols
         ]
         any_unknown = any([asset is None for asset in assets])
         assets = [asset for asset in assets if asset is not None]
-        if any_unknown is None:
+        if any_unknown:
             continue
         if len(assets) != 1:
             continue
-        apy = float(vault.get('apyOneMonthSample', 0.0)) / 100.0
-        if apy <= 0:
+        apy = float(vault.get('apy', {}).get('oneMonthSample', 0.0) or 0.0)
+        if apy <= 0 or apy >= 2:
+            # discard spurious data
             continue
         records.append(BasicRecord(
             protocol=Protocol.Yearn,

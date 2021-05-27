@@ -119,7 +119,7 @@ asgi_app = fastapi.FastAPI(
 @asgi_app.get(
     "/v1/apy/all",
     summary="Get APY for single and paired assets, sorted by APY descending",
-    response_model=List[AssetSingle],
+    response_model=List[Union[AssetSingle, AssetPair]],
 )
 async def get_all(asset: Optional[Asset] = None, protocol: Optional[Protocol] = None):
     return _filter_bases(asgi_app.state.combined, asset, protocol)
