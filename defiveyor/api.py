@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union, Set, Iterable
 
 import fastapi
 from pydantic import BaseModel, Field
@@ -8,6 +8,7 @@ import uvicorn
 
 from defiveyor import supported
 from defiveyor.ingest import ingest, RecordList
+from defiveyor.supported import Network, Protocol, Asset
 from defiveyor.utils import configure_logging
 
 UPDATE_STATE_INTERVAL_SECONDS = 60 * 60  # once per hour
@@ -15,14 +16,26 @@ UPDATE_STATE_INTERVAL_SECONDS = 60 * 60  # once per hour
 logger = logging.getLogger("api")
 
 
-class Asset(BaseModel):
-    network: str = Field(..., description="name of the underlying network")
-    protocol: str = Field(..., description="name of the protocol")
-    symbol: str = Field(..., description="native symbol of the asset")
+class AssetBase(BaseModel):
+    network: Network = Field(..., description="name of the underlying network")
+    protocol: Protocol = Field(..., description="name of the protocol")
+    apy: float = Field(..., description="estimated annual percentage yield")
+
+    @property
+    def assets(self) -> Set[Asset]:
+        raise NotImplementedError
+
+
+class AssetSingle(AssetBase):
+    kind: str = "single"
+    symbol: Asset = Field(..., description="native symbol of the asset")
     symbol_wrapped: Optional[str] = Field(
         ..., description="wrapped symbol of the asset in this network & protocol"
     )
-    apy: float = Field(..., description="estimated annual percentage yield")
+
+    @property
+    def assets(self) -> Set[Asset]:
+        return {self.symbol}
 
     class Config:
         schema_extra = {
@@ -36,18 +49,20 @@ class Asset(BaseModel):
         }
 
 
-class AssetPair(BaseModel):
-    network: str = Field(..., description="name of the underlying network")
-    protocol: str = Field(..., description="name of the protocol")
-    symbol_0: str = Field(..., description="native symbol of the asset")
+class AssetPair(AssetBase):
+    kind: str = "pair"
+    symbol_0: Asset = Field(..., description="native symbol of the asset")
     symbol_0_wrapped: Optional[str] = Field(
         ..., description="wrapped symbol of the asset in this network & protocol"
     )
-    symbol_1: str = Field(..., description="native symbol of the asset")
+    symbol_1: Asset = Field(..., description="native symbol of the asset")
     symbol_1_wrapped: Optional[str] = Field(
         ..., description="wrapped symbol of the asset in this network & protocol"
     )
-    apy: float = Field(..., description="estimated annual percentage yield")
+
+    @property
+    def assets(self) -> Set[Asset]:
+        return {self.symbol_0, self.symbol_1}
 
     class Config:
         schema_extra = {
@@ -61,6 +76,19 @@ class AssetPair(BaseModel):
                 "apy": 0.07,
             }
         }
+
+
+def _filter_bases(
+    bases: Iterable[AssetBase],
+    asset: Optional[Asset] = None,
+    protocol: Optional[Protocol] = None,
+) -> Iterable[AssetBase]:
+    return [
+        base
+        for base in bases
+        if (asset is None or asset in base.assets)
+        and (protocol is None or protocol == base.protocol)
+    ]
 
 
 asgi_app = fastapi.FastAPI(
@@ -84,31 +112,44 @@ asgi_app = fastapi.FastAPI(
 
 
 @asgi_app.get(
-    "/v1/apy/assets",
-    summary="Get APY for single assets",
-    response_model=List[Asset],
+    "/v1/apy/all",
+    summary="Get APY for single and paired assets, sorted by APY descending",
+    response_model=List[AssetSingle],
 )
-async def get_assets():
-    return asgi_app.state.assets
+async def get_all(asset: Optional[Asset] = None, protocol: Optional[Protocol] = None):
+    return _filter_bases(asgi_app.state.combined, asset, protocol)
+
+
+@asgi_app.get(
+    "/v1/apy/assets",
+    summary="Get APY for single assets, sorted by APY descending",
+    response_model=List[AssetSingle],
+)
+async def get_assets(
+    asset: Optional[Asset] = None, protocol: Optional[Protocol] = None
+):
+    return _filter_bases(asgi_app.state.assets, asset, protocol)
 
 
 @asgi_app.get(
     "/v1/apy/pairs",
-    summary="Get APY for asset pairs",
+    summary="Get APY for asset pairs, sorted by APY descending",
     response_model=List[AssetPair],
 )
-async def get_asset_pairs():
-    return asgi_app.state.asset_pairs
+async def get_asset_pairs(
+    asset: Optional[Asset] = None, protocol: Optional[Protocol] = None
+):
+    return _filter_bases(asgi_app.state.asset_pairs, asset, protocol)
 
 
-async def _update_ingest() -> Tuple[List[Asset], List[AssetPair]]:
+async def _update_ingest() -> Tuple[List[AssetSingle], List[AssetPair]]:
     records: RecordList = await ingest()
-    assets: List[Asset] = []
+    assets: List[AssetSingle] = []
     asset_pairs: List[AssetPair] = []
     for record in records:
         if len(record.assets) == 1:
             assets.append(
-                Asset(
+                AssetSingle(
                     network=record.network.value,
                     protocol=record.protocol.value,
                     symbol=record.assets[0].asset.value,
@@ -140,8 +181,15 @@ async def _init():
 async def _update_state():
     logger.info("updating state from ingest")
     assets, asset_pairs = await _update_ingest()
+    combined: List[Union[AssetSingle, AssetPair]] = [*assets, *asset_pairs]
+    # sort all by their apy
+    assets.sort(key=lambda a: a.apy, reverse=True)
+    asset_pairs.sort(key=lambda a: a.apy, reverse=True)
+    combined.sort(key=lambda a: a.apy, reverse=True)
+
     asgi_app.state.assets = assets
     asgi_app.state.asset_pairs = asset_pairs
+    asgi_app.state.combined = combined
     logger.info("update done")
 
 
