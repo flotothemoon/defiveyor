@@ -9,6 +9,10 @@ class Asset(enum.Enum):
     USD_Coin = "USDC"
     USD_Token = "USDT"
 
+    @property
+    def is_stable(self) -> bool:
+        return self in {Asset.DAI, Asset.USD_Token, Asset.USD_Coin}
+
     @staticmethod
     def map(asset_symbol: str) -> Optional["Asset"]:
         for asset in Asset:
@@ -20,7 +24,8 @@ class Asset(enum.Enum):
 
 
 class Protocol(enum.Enum):
-    UniSwap = "uniswap-v2"
+    UniSwapV2 = "uniswap-v2"
+    UniSwapV3 = "uniswap-v3"
     SushiSwap = "sushiswap"
     Bancor = "bancor"
     OneInch = "1inch"
@@ -32,3 +37,9 @@ class Protocol(enum.Enum):
 
 class Network(enum.Enum):
     Ethereum = "ethereum"
+
+
+class RiskProfile(enum.Enum):
+    Low = "low"
+    Medium = "medium"
+    High = "high"

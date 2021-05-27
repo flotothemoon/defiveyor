@@ -8,7 +8,7 @@ import uvicorn
 
 from defiveyor import supported
 from defiveyor.ingest import ingest, RecordList
-from defiveyor.supported import Network, Protocol, Asset
+from defiveyor.supported import Network, Protocol, Asset, RiskProfile
 from defiveyor.utils import configure_logging
 
 UPDATE_STATE_INTERVAL_SECONDS = 60 * 60  # once per hour
@@ -20,6 +20,9 @@ class AssetBase(BaseModel):
     network: Network = Field(..., description="name of the underlying network")
     protocol: Protocol = Field(..., description="name of the protocol")
     apy: float = Field(..., description="estimated annual percentage yield")
+    risk_profile: RiskProfile = Field(
+        ..., description="the risk associated with this holding"
+    )
 
     @property
     def assets(self) -> Set[Asset]:
@@ -45,6 +48,7 @@ class AssetSingle(AssetBase):
                 "symbol": "BTC",
                 "symbol_wrapped": "WBTC",
                 "apy": 0.0023,
+                "risk_profile": "medium"
             }
         }
 
@@ -74,6 +78,7 @@ class AssetPair(AssetBase):
                 "symbol_1": "ETH",
                 "symbol_1_wrapped": "WETH",
                 "apy": 0.07,
+                "risk_profile": "high"
             }
         }
 
@@ -142,6 +147,23 @@ async def get_asset_pairs(
     return _filter_bases(asgi_app.state.asset_pairs, asset, protocol)
 
 
+def _get_risk_profile_for_single(asset: Asset) -> RiskProfile:
+    if asset.is_stable:
+        return RiskProfile.Low
+    else:
+        return RiskProfile.High
+
+
+def _get_risk_profile_for_pair(asset_0: Asset, asset_1: Asset) -> RiskProfile:
+    if asset_0.is_stable:
+        if asset_1.is_stable:
+            return RiskProfile.Low
+        else:
+            return RiskProfile.Medium
+    else:
+        return RiskProfile.High
+
+
 async def _update_ingest() -> Tuple[List[AssetSingle], List[AssetPair]]:
     records: RecordList = await ingest()
     assets: List[AssetSingle] = []
@@ -150,23 +172,27 @@ async def _update_ingest() -> Tuple[List[AssetSingle], List[AssetPair]]:
         if len(record.assets) == 1:
             assets.append(
                 AssetSingle(
-                    network=record.network.value,
-                    protocol=record.protocol.value,
-                    symbol=record.assets[0].asset.value,
+                    network=record.network,
+                    protocol=record.protocol,
+                    symbol=record.assets[0].asset,
                     symbol_wrapped=record.assets[0].wrapped_symbol,
                     apy=record.apy,
+                    risk_profile=_get_risk_profile_for_single(record.assets[0].asset),
                 )
             )
         elif len(record.assets) == 2:
             asset_pairs.append(
                 AssetPair(
-                    network=record.network.value,
-                    protocol=record.protocol.value,
-                    symbol_0=record.assets[0].asset.value,
+                    network=record.network,
+                    protocol=record.protocol,
+                    symbol_0=record.assets[0].asset,
                     symbol_0_wrapped=record.assets[0].wrapped_symbol,
-                    symbol_1=record.assets[1].asset.value,
+                    symbol_1=record.assets[1].asset,
                     symbol_1_wrapped=record.assets[1].wrapped_symbol,
                     apy=record.apy,
+                    risk_profile=_get_risk_profile_for_pair(
+                        record.assets[0].asset, record.assets[1].asset
+                    ),
                 )
             )
     return assets, asset_pairs
