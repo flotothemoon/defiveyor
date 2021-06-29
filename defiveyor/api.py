@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple, Union, Set, Iterable
 
 import fastapi
 from pydantic import BaseModel, Field
+from starlette.middleware.cors import CORSMiddleware
 import uvicorn
 
 from defiveyor import supported
@@ -92,7 +93,7 @@ def _filter_bases(
         base
         for base in bases
         if (asset is None or asset in base.assets)
-        and (protocol is None or protocol == base.protocol)
+           and (protocol is None or protocol == base.protocol)
     ]
 
 
@@ -109,10 +110,15 @@ asgi_app = fastapi.FastAPI(
         f" - Supported Assets: {', '.join([asset.value for asset in supported.Asset])}\n\n"
         " - The source code is available on [GitHub](https://github.com/flotothemoon/defiveyor).\n\n"
         "\n"
-        "Provided by [Cryptoveyor](https://www.cryptoveyor.com),"
-        " which does the same but for all kinds of ecosystem events.\n"
+        "Provided by [Cryptoveyor](https://www.cryptoveyor.com)"
         "\n"
     ),
+)
+asgi_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
 )
 
 
