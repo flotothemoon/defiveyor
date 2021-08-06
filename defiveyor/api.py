@@ -237,7 +237,7 @@ if __name__ == "__main__":
     uvicorn_config = uvicorn.Config(
         app=asgi_app,
         host="0.0.0.0",
-        port=7777,
+        port=7778,
         log_config=None,
         log_level=None,
         access_log=False,

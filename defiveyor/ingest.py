@@ -2,7 +2,7 @@ import asyncio
 from itertools import chain
 import logging
 import os
-from typing import List, Any, Mapping, Optional
+from typing import List, Any, Mapping, Optional, Iterable
 
 import aiohttp
 from attr import dataclass
@@ -295,6 +295,19 @@ async def _ingest_yearn(session: aiohttp.ClientSession) -> RecordList:
 
     return records
 
+# set of assets deemed "too adventurous" (quote Piers) for GoodFi
+BAD_SYMBOLS = {
+    "crvHBTC", "crvAETHc", "crvRENBTC", "crvBBTC", "crvSBTC", "pBTC", "renBTC",
+    "pBTC35A", "ETHIX", "crvSETH", "YF-DAI", "BBTC", "imBTC", "ankrETH", "PETH18C",
+    "ibBTC", "ETHY", "CRETH2", "ETHYS", "pBTC", "sBTC"
+}
+
+
+def _filter_records(records: Iterable[BasicRecord]):
+    return [record for record in records
+            if not any(asset.wrapped_symbol in BAD_SYMBOLS for asset in record.assets)
+            and record.apy >= 0.01]
+
 
 async def ingest() -> RecordList:
     logger.info("starting")
@@ -308,7 +321,8 @@ async def ingest() -> RecordList:
         ]
         ingest_results = await asyncio.gather(*ingests_tasks)
         logger.info("completed")
-        return list(chain(*ingest_results))
+        ingest_results = _filter_records(chain(*ingest_results))
+        return ingest_results
 
 
 if __name__ == "__main__":
