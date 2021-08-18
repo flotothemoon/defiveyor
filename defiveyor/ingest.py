@@ -87,7 +87,6 @@ async def _do_get(
             )
             await asyncio.sleep(retry_timeout_seconds)
 
-
 async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
     # see https://docs.zapper.fi/zapper-api/api-guides
     base_url = "https://api.zapper.fi/v1/"
@@ -295,6 +294,39 @@ async def _ingest_yearn(session: aiohttp.ClientSession) -> RecordList:
 
     return records
 
+async def _ingest_aave(session: aiohttp.ClientSession) -> RecordList:
+    # see https://aave-api-v2.aave.com
+    base_url = "https://aave-api-v2.aave.com"
+
+    @rate_limited(name="dydx", logger=logger, operations_per_second=1)
+    async def _get(path: str, params: Mapping[str, Any] = None):
+        params = params or {}
+        final_path = base_url + path
+        return await _do_get(final_path, params, session)
+
+    async def _get_reserves():
+        response = await _get("/data/markets-data")
+        return response['reserves']
+
+    records: RecordList = []
+    reserves = await _get_reserves()
+    for reserve in reserves:
+        asset = WrappedAsset.wrap(reserve['symbol'])
+        if asset is None:
+            continue
+        apy = float(reserve.get('liquidityRate', 0.0))
+        if apy <= 0:
+            continue
+        records.append(BasicRecord(
+            protocol=Protocol.Aave,
+            network=Network.Ethereum,
+            assets=[asset],
+            apy=apy
+        ))
+
+    return records
+
+
 # set of assets deemed "too adventurous" (quote Piers) for GoodFi
 BAD_SYMBOLS = {
     "crvHBTC", "crvAETHc", "crvRENBTC", "crvBBTC", "crvSBTC", "pBTC", "renBTC",
@@ -318,6 +350,7 @@ async def ingest() -> RecordList:
             _ingest_bancor(session),
             _ingest_dydx(session),
             _ingest_zapper(session),
+            _ingest_aave(session),
         ]
         ingest_results = await asyncio.gather(*ingests_tasks)
         logger.info("completed")
