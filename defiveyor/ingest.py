@@ -315,6 +315,8 @@ async def _ingest_aave(session: aiohttp.ClientSession) -> RecordList:
     records: RecordList = []
     reserves = await _get_reserves()
     for reserve in reserves:
+        if reserve['symbol'] not in {'WBTC'} and not reserve.get('stableBorrowRateEnabled', False):
+            continue
         asset = WrappedAsset.wrap(reserve['symbol'])
         if asset is None:
             continue
