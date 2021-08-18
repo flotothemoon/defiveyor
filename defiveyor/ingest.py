@@ -126,7 +126,7 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
         for stats in supported_pool_stats_by_network
     }
     # there is no API endpoint for getting supported lending stats for some reason
-    supported_lending_stats_by_network = {"ethereum": {"aave", "compound"}}
+    supported_lending_stats_by_network = {"ethereum": {"compound"}}
 
     records: RecordList = []
     for network in (Network.Ethereum,):
