@@ -87,6 +87,7 @@ async def _do_get(
             )
             await asyncio.sleep(retry_timeout_seconds)
 
+
 async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
     # see https://docs.zapper.fi/zapper-api/api-guides
     base_url = "https://api.zapper.fi/v1/"
@@ -271,6 +272,8 @@ async def _ingest_yearn(session: aiohttp.ClientSession) -> RecordList:
     records: RecordList = []
     all_vaults = await _get_vaults_all()
     for vault in all_vaults:
+        if "experimental" in vault.get('name', '').lower():
+            continue
         token_symbols = [vault['displayName']]
         assets = [
             WrappedAsset.wrap(symbol) for symbol in token_symbols
@@ -293,6 +296,7 @@ async def _ingest_yearn(session: aiohttp.ClientSession) -> RecordList:
         ))
 
     return records
+
 
 async def _ingest_aave(session: aiohttp.ClientSession) -> RecordList:
     # see https://aave-api-v2.aave.com
