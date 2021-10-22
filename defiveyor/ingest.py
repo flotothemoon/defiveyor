@@ -350,7 +350,8 @@ def _filter_records(records: Iterable[BasicRecord]):
 async def ingest() -> RecordList:
     logger.info("starting")
 
-    async with aiohttp.ClientSession() as session:
+    # sometimes the APIs SSL certificates expire so we don't verify them
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(verify_ssl=False)) as session:
         ingests_tasks = [
             _ingest_yearn(session),
             _ingest_bancor(session),
