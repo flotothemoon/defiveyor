@@ -122,7 +122,7 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
 
     supported_pool_stats_by_network = await _get_supported_pool_stats()
     supported_pool_stats_by_network = {
-        stats["network"]: stats["protocols"]
+        stats["network"]: stats["appIds"]
         for stats in supported_pool_stats_by_network
     }
     # there is no API endpoint for getting supported lending stats for some reason
