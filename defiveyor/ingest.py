@@ -99,82 +99,69 @@ async def _ingest_zapper(session: aiohttp.ClientSession) -> RecordList:
         final_path = base_url + path
         return await _do_get(final_path, params, session)
 
-    async def _get_supported_pool_stats():
-        return await _get("pool-stats/supported")
-
-    async def _get_pool_stats(pool_type: str):
-        return await _get(f"pool-stats/{pool_type}")
-
-    async def _get_lending_stats(vault_type: str):
-        return await _get(f"lending-stats/{vault_type}")
+    async def _get_market_stats(app_id: str, type: str, network: str = "ethereum"):
+        return await _get(f"protocols/{app_id}/token-market-data", {"type": type, "network": network})
 
     # Note: Zapper supports Yearn and Bancor but they don't have APY information,
     #  so they are ingested separately.
-    protocols_mapping: Mapping[Protocol, str] = {
-        # TODO @Feature @Data: Curve pools can have >2 tokens
+    pools_mapping: Mapping[Protocol, str] = {
+        # TODO @Feature @Data: Curve farms can have >2 tokens
         # Protocol.Curve: "curve",
         Protocol.OneInch: "1inch",
         Protocol.SushiSwap: "sushiswap",
         Protocol.UniSwapV2: "uniswap-v2",
+    }
+
+    lending_mapping: Mapping[Protocol, str] = {
         Protocol.Aave: "aave",
         Protocol.Compound: "compound",
     }
 
-    supported_pool_stats_by_network = await _get_supported_pool_stats()
-    supported_pool_stats_by_network = {
-        stats["network"]: stats["appIds"]
-        for stats in supported_pool_stats_by_network
-    }
-    # there is no API endpoint for getting supported lending stats for some reason
-    supported_lending_stats_by_network = {"ethereum": {"compound"}}
-
     records: RecordList = []
-    for network in (Network.Ethereum,):
-        network_key = network.value
-        supported_pool_stats = supported_pool_stats_by_network.get(network_key)
-        supported_lending_stats = supported_lending_stats_by_network.get(network_key)
-        for protocol, protocol_key in protocols_mapping.items():
-            if protocol_key in supported_pool_stats:
-                pool_stats = await _get_pool_stats(protocol_key)
-                for pool_stat in pool_stats:
-                    assets = [
-                        WrappedAsset.wrap(token["symbol"])
-                        for token in pool_stat["tokens"]
-                        if token["reserve"] > 0
-                    ]
-                    any_unknown = any([asset is None for asset in assets])
-                    assets = [asset for asset in assets if asset is not None]
-                    # TODO @Robustness: do something if any unknown?
-                    if len(assets) != 2 or any_unknown:
-                        continue
+    for protocol, protocol_key in pools_mapping.items():
+        pool_stats = await _get_market_stats(protocol_key, type="pool", network="ethereum")
+        for pool_stat in pool_stats:
+            tokens = pool_stat["tokens"]
+            assets = [
+                WrappedAsset.wrap(tokens[0]["symbol"]),
+                WrappedAsset.wrap(tokens[1]["symbol"])
+            ]
+            any_unknown = any([asset is None for asset in assets])
+            assets = [asset for asset in assets if asset is not None]
+            if len(assets) != 2 or any_unknown:
+                continue
 
-                    apy = pool_stat["yearlyROI"] or 0
-                    if apy <= 0:
-                        continue
-                    records.append(
-                        BasicRecord(
-                            protocol=protocol,
-                            network=network,
-                            assets=assets,
-                            apy=apy,
-                        )
-                    )
+            # apy is fee rewards annualised divided by liquidity
+            fee = float(pool_stat['fee'])
+            volume_24h = float(pool_stat['volume'])
+            liquidity = float(pool_stat['liquidity'])
+            if liquidity <= 10000:
+                continue
+            apy = ((fee * volume_24h) / liquidity) * 365.2425
 
-            if protocol_key in supported_lending_stats:
-                lending_stats = await _get_lending_stats(protocol_key)
-                for lending_stat in lending_stats:
-                    asset = WrappedAsset.wrap(lending_stat["symbol"])
-                    if asset is None:
-                        continue
-                    apy = lending_stat["supplyApy"]
-                    if apy <= 0:
-                        continue
+            records.append(
+                BasicRecord(
+                    protocol=protocol,
+                    network=Network.Ethereum,
+                    assets=assets,
+                    apy=apy,
+                )
+            )
 
-                    records.append(
-                        BasicRecord(
-                            protocol=protocol, network=network, assets=[asset], apy=apy
-                        )
-                    )
+    for protocol, protocol_key in lending_mapping.items():
+        lending_stats = await _get_market_stats(protocol_key, type="interest-bearing", network="ethereum")
+        for lending_stat in lending_stats:
+            asset = WrappedAsset.wrap(lending_stat["symbol"])
+            if asset is None:
+                continue
+            apy = lending_stat["supplyApy"]
+            if apy <= 0:
+                continue
+            records.append(
+                BasicRecord(
+                    protocol=protocol, network=Network.Ethereum, assets=[asset], apy=apy
+                )
+            )
 
     return records
 
@@ -351,9 +338,9 @@ async def ingest() -> RecordList:
     logger.info("starting")
 
     # sometimes the APIs SSL certificates expire so we don't verify them
-    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(verify_ssl=False)) as session:
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
         ingests_tasks = [
-            _ingest_yearn(session),
+            # _ingest_yearn(session),
             _ingest_bancor(session),
             _ingest_dydx(session),
             _ingest_zapper(session),
